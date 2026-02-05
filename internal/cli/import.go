@@ -28,8 +28,13 @@ Use --labels to apply Gmail labels to imported emails. Labels are specified as a
 comma-separated list of label names (e.g., --labels "tickets,music"). The tool will
 automatically resolve label names to their corresponding Gmail label IDs.
 
+DEDUPLICATION:
+Use --skip-duplicates to avoid importing emails that already exist in Gmail. This checks
+for existing messages by Message-ID before importing. Enabling this will skip duplicates
+and log the count of skipped messages.
+
 Use --limit to process only a specific number of messages, which is useful for testing
-import process with a small number of messages before running a full import.`,
+-import process with a small number of messages before running a full import.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Build import configuration from flags
 		importConfig, err := buildImportConfig(cmd)
@@ -59,6 +64,9 @@ import process with a small number of messages before running a full import.`,
 		fmt.Printf("Import completed successfully!\n")
 		fmt.Printf("Total files found: %d\n", result.TotalFound)
 		fmt.Printf("Total emails imported: %d\n", result.TotalImported)
+		if result.TotalSkipped > 0 {
+			fmt.Printf("Total emails skipped (duplicates): %d\n", result.TotalSkipped)
+		}
 		fmt.Printf("Total size: %s\n", metrics.FormatBytes(result.TotalSize))
 		fmt.Printf("Duration: %s\n", result.Duration)
 
@@ -78,6 +86,7 @@ func init() {
 	importCmd.Flags().Bool("preserve-dates", true, "Preserve original email dates")
 	importCmd.Flags().IntP("limit", "l", 0, "Limit the number of messages to process (0 = no limit, useful for testing)")
 	importCmd.Flags().String("labels", "", "Gmail labels to apply to imported emails (comma-separated)")
+	importCmd.Flags().Bool("skip-duplicates", false, "Skip emails that already exist in Gmail (based on Message-ID)")
 }
 
 func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
@@ -113,6 +122,9 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	}
 	if labels, _ := cmd.Flags().GetString("labels"); labels != "" {
 		config.Labels = labels
+	}
+	if skipDuplicates, _ := cmd.Flags().GetBool("skip-duplicates"); skipDuplicates {
+		config.SkipDuplicates = skipDuplicates
 	}
 
 	// Validate required fields

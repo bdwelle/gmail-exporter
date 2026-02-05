@@ -27,6 +27,7 @@ type Config struct {
 	PreserveDates   bool   `json:"preserve_dates"`
 	Limit           int    `json:"limit"`
 	Labels          string `json:"labels"`
+	SkipDuplicates  bool   `json:"skip_duplicates"`
 }
 
 // Result represents the import operation result
@@ -34,6 +35,7 @@ type Result struct {
 	TotalFound    int           `json:"total_found"`
 	TotalImported int           `json:"total_imported"`
 	TotalFailed   int           `json:"total_failed"`
+	TotalSkipped  int           `json:"total_skipped"`
 	TotalSize     int64         `json:"total_size"`
 	Duration      time.Duration `json:"duration"`
 	Failures      []Failure     `json:"failures,omitempty"`
@@ -222,14 +224,19 @@ func (i *Importer) importEmails(emailFiles []string) (*Result, error) {
 				Timestamp: time.Now(),
 			})
 			logrus.WithError(importRes.Error).WithField("file_path", importRes.FilePath).Error("Failed to import email")
+		} else if importRes.Size == 0 {
+			// Email was skipped (e.g., duplicate)
+			result.TotalSkipped++
+			logrus.WithField("file_path", importRes.FilePath).Debug("Skipped email")
 		} else {
 			result.TotalImported++
 			result.TotalSize += importRes.Size
 		}
 
-		// Show progress
-		fmt.Printf("\rProgress: %d of %d messages imported (%.1f%%)",
-			result.TotalImported, total, float64(processed)/float64(total)*100)
+		// Show progress (imported + skipped)
+		completed := result.TotalImported + result.TotalSkipped
+		fmt.Printf("\rProgress: %d of %d messages processed (%.1f%%)",
+			completed, total, float64(processed)/float64(total)*100)
 	}
 	fmt.Println() // New line after progress
 
@@ -284,6 +291,20 @@ func (i *Importer) importEMLFile(data []byte) (int64, error) {
 	// Extract labels from email headers
 	labelIds := i.getLabelIdsForEmail(data)
 
+	// Check for duplicates if enabled
+	if i.config.SkipDuplicates {
+		messageID := i.extractMessageID(data)
+		if messageID != "" {
+			exists, err := i.messageExists(messageID)
+			if err != nil {
+				logrus.WithError(err).WithField("message_id", messageID).Warn("Failed to check if message exists, proceeding with import")
+			} else if exists {
+				logrus.WithField("message_id", messageID).Info("Message already exists in Gmail, skipping")
+				return 0, nil
+			}
+		}
+	}
+
 	// Create a Gmail message from the EML data
 	message := &gmail.Message{
 		Raw:      encodeBase64URL(data),
@@ -316,6 +337,21 @@ func (i *Importer) importJSONFile(data []byte) (int64, error) {
 		// If decoding fails, just use the raw as-is
 		rawBytes = []byte(emailData.Raw)
 	}
+
+	// Check for duplicates if enabled
+	if i.config.SkipDuplicates {
+		messageID := i.extractMessageID(rawBytes)
+		if messageID != "" {
+			exists, err := i.messageExists(messageID)
+			if err != nil {
+				logrus.WithError(err).WithField("message_id", messageID).Warn("Failed to check if message exists, proceeding with import")
+			} else if exists {
+				logrus.WithField("message_id", messageID).Info("Message already exists in Gmail, skipping")
+				return 0, nil
+			}
+		}
+	}
+
 	labelIds := i.getLabelIdsForEmail(rawBytes)
 
 	// Create a Gmail message
@@ -543,6 +579,67 @@ func validateConfig(config *Config) error {
 	}
 
 	return nil
+}
+
+// extractMessageID extracts the Message-ID header from email data
+func (i *Importer) extractMessageID(data []byte) string {
+	dataStr := string(data)
+
+	// Find the Message-ID header
+	headerPrefix := "\nMessage-ID:"
+	idx := strings.Index(dataStr, headerPrefix)
+	if idx == -1 {
+		// Try with lowercase
+		headerPrefix = "\nmessage-id:"
+		idx = strings.Index(dataStr, headerPrefix)
+		if idx == -1 {
+			return ""
+		}
+	}
+
+	// Extract the header value (up to the next line)
+	start := idx + len(headerPrefix)
+	end := len(dataStr)
+
+	for i := start; i < len(dataStr); i++ {
+		if dataStr[i] == '\n' {
+			end = i
+			break
+		}
+	}
+
+	messageID := strings.TrimSpace(dataStr[start:end])
+
+	// Remove angle brackets and any trailing parameters
+	messageID = strings.Trim(messageID, "<>")
+
+	// Extract just the ID part before parameters (like ; or space)
+	if idx := strings.IndexAny(messageID, ";\t "); idx >= 0 {
+		messageID = messageID[:idx]
+	}
+
+	messageID = strings.TrimSpace(messageID)
+
+	return messageID
+}
+
+// messageExists checks if a message with the given Message-ID already exists in Gmail
+func (i *Importer) messageExists(messageID string) (bool, error) {
+	if messageID == "" {
+		return false, nil
+	}
+
+	// Search for message with this Message-ID
+	q := fmt.Sprintf("rfc822msgid:%s", messageID)
+
+	listCall := i.gmailService.Users.Messages.List("me").Q(q).MaxResults(1)
+	resp, err := listCall.Do()
+	if err != nil {
+		return false, fmt.Errorf("failed to check if message exists: %w", err)
+	}
+
+	// If we get any results, the message exists
+	return len(resp.Messages) > 0, nil
 }
 
 // encodeBase64URL encodes data in base64url format for Gmail API

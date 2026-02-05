@@ -92,6 +92,51 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+func TestExtractMessageID(t *testing.T) {
+	importer := &Importer{}
+
+	tests := []struct {
+		name       string
+		emailData  []byte
+		expectedID string
+	}{
+		{
+			name:       "simple message-id",
+			emailData:  []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nMessage-ID: <test@example.com>\n\nBody"),
+			expectedID: "test@example.com",
+		},
+		{
+			name:       "message-id with parameters",
+			emailData:  []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nMessage-ID: <test@example.com; Mon, 05 Feb 2026 12:00:00 GMT>\n\nBody"),
+			expectedID: "test@example.com",
+		},
+		{
+			name:       "message-id with angle brackets and space",
+			emailData:  []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nMessage-ID: <test@example.com> \n\nBody"),
+			expectedID: "test@example.com",
+		},
+		{
+			name:       "no message-id header",
+			emailData:  []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\n\nBody"),
+			expectedID: "",
+		},
+		{
+			name:       "lowercase message-id",
+			emailData:  []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nmessage-id: <test@example.com>\n\nBody"),
+			expectedID: "test@example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := importer.extractMessageID(tt.emailData)
+			if result != tt.expectedID {
+				t.Errorf("extractMessageID() = %q, want %q", result, tt.expectedID)
+			}
+		})
+	}
+}
+
 func TestNormalizeLabelName(t *testing.T) {
 	importer := &Importer{}
 
