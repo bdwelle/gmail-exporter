@@ -6,13 +6,16 @@ A powerful command-line tool for exporting, importing, and managing Gmail emails
 
 - **Export emails** from Gmail with advanced filtering (supports all Gmail search operators)
 - **Import emails** into Gmail accounts (supports cross-account transfers)
-- **Cleanup emails** from source account after export
+- **Preserve labels** from original emails (via X-Gmail-Labels header)
+- **Avoid duplicates** during import with Message-ID checking
+- **Cleanup emails** from source account after migration (archive or delete)
 - **Multiple formats**: EML, JSON, mbox
 - **Parallel processing** for high performance
 - **Progress tracking** with real-time indicators
 - **Resumable operations** with state management
-- **Comprehensive metrics** collection (JSON and Prometheus formats)
+- **Comprehensive metrics** collection (JSON and Prometheus)
 - **OAuth 2.0 authentication** with Google Gmail API
+- **Mbox helper script** (`split-mbox-emails.py`) to split mbox files for importing
 - **Cross-account support** for migrating between Gmail accounts
 
 ## Installation
@@ -124,27 +127,53 @@ For migrating emails between different Gmail accounts:
 
 ### Cross-Account Migration
 
+For migrating emails between different Gmail accounts:
+
 ```bash
 # 1. Export from source account
 ./gmail-exporter export \
   --credentials-file source-creds.json \
   --token-file source-token.json \
-  --output-dir migration/ \
-  --search-scope "all_mail"
+  --output-dir migration-exports \
+  --format eml
 
 # 2. Import to destination account
 ./gmail-exporter import \
-  --input-dir migration/ \
+  --input-dir migration-exports \
   --import-credentials dest-creds.json \
   --import-token dest-token.json
+```
 
-# 3. Optional: Clean up source account
-# Note: The export process automatically creates processed_emails.json
-./gmail-exporter cleanup \
-  --credentials-file source-creds.json \
-  --token-file source-token.json \
-  --action archive \
-  --filter-file migration/processed_emails.json
+### Import Mbox Files
+
+When importing mbox files, first split them into individual emails:
+
+```bash
+# Split mbox into individual .eml files
+./split-mbox-emails.py backups/my_emails.mbox backups/split
+
+# Import the split emails
+./gmail-exporter import --input-dir backups/split
+```
+
+**Mbox Import Options:**
+
+```bash
+# Import with label preservation (emails with X-Gmail-Labels header)
+./split-mbox-emails.py backups/my_emails.mbox backups/split
+./gmail-exporter import --input-dir backups/split
+
+# Import with custom labels (overrides email labels)
+./split-mbox-emails.py backups/my_emails.mbox backups/split
+./gmail-exporter import --input-dir backups/split --labels "tickets,work"
+
+# Import with deduplication (skip emails already in Gmail)
+./split-mbox-emails.py backups/my_emails.mbox backups/split
+./gmail-exporter import --input-dir backups/split --skip-duplicates
+
+# Test import with limit first
+./split-mbox-emails.py backups/my_emails.mbox backups/split
+./gmail-exporter import --input-dir backups/split --limit 5
 ```
 
 ### Generate Filter File from Existing Exports
@@ -224,19 +253,28 @@ All Gmail search operators are supported:
 - `--labels`: Specific labels (comma-separated)
 - `--search-scope`: Search scope (all_mail, inbox, sent, drafts, spam, trash)
 
-## Output Formats
+### Output Formats
 
 ### EML Format (Default)
-
 Standard email format that preserves all email data including headers, body, and attachments.
 
 ### JSON Format
-
-Structured format containing the complete Gmail API message object.
+Structured format containing the complete Gmail API message object, useful for programmatic processing.
 
 ### Mbox Format
+Unix mailbox format for compatibility with email clients. Contains multiple emails in a single file.
 
-Unix mailbox format for compatibility with email clients.
+**⚠️ Important:** Mbox files must be split into individual .eml files before importing. Use the provided `split-mbox-emails.py` helper script:
+
+```bash
+# Split mbox file into individual emails
+./split-mbox-emails.py exports/my_emails.mbox exports/split
+
+# Now import the individual emails
+./gmail-exporter import --input-dir exports/split
+```
+
+See [USAGE.md](USAGE.md) for more details on importing mbox files.
 
 ## Security and Privacy
 
@@ -306,7 +344,16 @@ The tool collects comprehensive metrics:
     "bytes_per_second": 6553600
   }
 }
-```
+  ```
+
+## Tools
+
+- **`gmail-exporter`**: Main CLI application
+- **`split-mbox-emails.py`**: Helper script to split mbox files into individual .eml files for importing
+  - Validates mbox format before processing
+  - Handles empty messages and malformed mbox files gracefully
+  - Supports verbose mode (`-v` or `--verbose`) for debugging
+  - Usage: `./split-mbox-emails.py <mbox_file> [output_dir] [options]`
 
 ## Contributing
 
