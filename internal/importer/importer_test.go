@@ -92,6 +92,136 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeLabelName(t *testing.T) {
+	importer := &Importer{}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "system label Important",
+			input:    "Important",
+			expected: "IMPORTANT",
+		},
+		{
+			name:     "system label Starred",
+			input:    "Starred",
+			expected: "STARRED",
+		},
+		{
+			name:     "system label Unread",
+			input:    "Unread",
+			expected: "UNREAD",
+		},
+		{
+			name:     "Category Personal",
+			input:    "Category Personal",
+			expected: "CATEGORY_PERSONAL",
+		},
+		{
+			name:     "Category Social",
+			input:    "Category Social",
+			expected: "CATEGORY_SOCIAL",
+		},
+		{
+			name:     "Category Updates",
+			input:    "Category Updates",
+			expected: "CATEGORY_UPDATES",
+		},
+		{
+			name:     "Category Forums",
+			input:    "Category Forums",
+			expected: "CATEGORY_FORUMS",
+		},
+		{
+			name:     "user-defined label",
+			input:    "my-custom-label",
+			expected: "my-custom-label",
+		},
+		{
+			name:     "user label with spaces",
+			input:    "projects/my project",
+			expected: "projects/my project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := importer.normalizeLabelName(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeLabelName(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExtractLabelsFromHeaders(t *testing.T) {
+	importer := &Importer{}
+
+	tests := []struct {
+		name           string
+		emailData      []byte
+		expectedLabels []string
+	}{
+		{
+			name:           "single label",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels: Important\n\nBody"),
+			expectedLabels: []string{"Important"},
+		},
+		{
+			name:           "multiple labels",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels: Important,Starred,Unread\n\nBody"),
+			expectedLabels: []string{"Important", "Starred", "Unread"},
+		},
+		{
+			name:           "labels with spaces",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels: Category Personal, Category Social\n\nBody"),
+			expectedLabels: []string{"Category Personal", "Category Social"},
+		},
+		{
+			name:           "labels with whitespace",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels:  Important  ,  Starred  \n\nBody"),
+			expectedLabels: []string{"Important", "Starred"},
+		},
+		{
+			name:           "no labels header",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\n\nBody"),
+			expectedLabels: nil,
+		},
+		{
+			name:           "empty labels header",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels: \n\nBody"),
+			expectedLabels: nil,
+		},
+		{
+			name:           "user-defined labels",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels: my-label,projects/work\n\nBody"),
+			expectedLabels: []string{"my-label", "projects/work"},
+		},
+		{
+			name:           "mixed system and user labels",
+			emailData:      []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\nX-Gmail-Labels: Important,my-label,Category Personal\n\nBody"),
+			expectedLabels: []string{"Important", "my-label", "Category Personal"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := importer.extractLabelsFromHeaders(tt.emailData)
+			if len(result) != len(tt.expectedLabels) {
+				t.Errorf("Expected %d labels, got %d: %v vs %v", len(tt.expectedLabels), len(result), tt.expectedLabels, result)
+			}
+			for i, label := range tt.expectedLabels {
+				if i >= len(result) || result[i] != label {
+					t.Errorf("Label %d: expected %q, got %q", i, label, result)
+				}
+			}
+		})
+	}
+}
+
 func TestFindEmailFiles(t *testing.T) {
 	// Create temporary directory with test files
 	tempDir, err := os.MkdirTemp("", "importer_test")

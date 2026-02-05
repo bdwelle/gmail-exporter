@@ -26,6 +26,7 @@ type Config struct {
 	ParallelWorkers int    `json:"parallel_workers"`
 	PreserveDates   bool   `json:"preserve_dates"`
 	Limit           int    `json:"limit"`
+	Labels          string `json:"labels"`
 }
 
 // Result represents the import operation result
@@ -47,10 +48,14 @@ type Failure struct {
 
 // Importer handles email import operations
 type Importer struct {
-	config        *Config
-	authenticator *auth.Authenticator
-	gmailService  *gmail.Service
-	metrics       *metrics.Collector
+	config           *Config
+	authenticator    *auth.Authenticator
+	gmailService     *gmail.Service
+	metrics          *metrics.Collector
+	labelIds         []string
+	labelCache       map[string]string
+	labelCacheMutex  sync.RWMutex
+	allLabelsFetched bool
 }
 
 // New creates a new importer instance
@@ -100,6 +105,9 @@ func (i *Importer) Import() (*Result, error) {
 	}
 
 	logrus.WithField("count", len(emailFiles)).Info("Found email files to import")
+
+	// Initialize label cache
+	i.labelCache = make(map[string]string)
 
 	// Apply limit if specified
 	if i.config.Limit > 0 && len(emailFiles) > i.config.Limit {
@@ -273,9 +281,13 @@ func (i *Importer) importSingleEmail(filePath string) (int64, error) {
 
 // importEMLFile imports an EML format email
 func (i *Importer) importEMLFile(data []byte) (int64, error) {
+	// Extract labels from email headers
+	labelIds := i.getLabelIdsForEmail(data)
+
 	// Create a Gmail message from the EML data
 	message := &gmail.Message{
-		Raw: encodeBase64URL(data),
+		Raw:      encodeBase64URL(data),
+		LabelIds: labelIds,
 	}
 
 	// Import the message (does not send, just adds to mailbox)
@@ -298,13 +310,22 @@ func (i *Importer) importJSONFile(data []byte) (int64, error) {
 		return 0, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
+	// Extract labels from email headers
+	rawBytes, err := base64.URLEncoding.DecodeString(emailData.Raw + strings.Repeat("=", ((4-len(emailData.Raw)%4)%4)))
+	if err != nil {
+		// If decoding fails, just use the raw as-is
+		rawBytes = []byte(emailData.Raw)
+	}
+	labelIds := i.getLabelIdsForEmail(rawBytes)
+
 	// Create a Gmail message
 	message := &gmail.Message{
-		Raw: emailData.Raw,
+		Raw:      emailData.Raw,
+		LabelIds: labelIds,
 	}
 
 	// Import the message (does not send, just adds to mailbox)
-	_, err := i.gmailService.Users.Messages.Import("me", message).Do()
+	_, err = i.gmailService.Users.Messages.Import("me", message).Do()
 	if err != nil {
 		return 0, fmt.Errorf("failed to import message: %w", err)
 	}
@@ -317,7 +338,8 @@ func (i *Importer) importMboxFile(data []byte) (int64, error) {
 	// For mbox files, we need to parse the format and extract individual messages
 	// This is a simplified implementation - in practice, you'd want a proper mbox parser
 	message := &gmail.Message{
-		Raw: encodeBase64URL(data),
+		Raw:      encodeBase64URL(data),
+		LabelIds: i.getLabelIdsForEmail(data),
 	}
 
 	// Import the message (does not send, just adds to mailbox)
@@ -327,6 +349,179 @@ func (i *Importer) importMboxFile(data []byte) (int64, error) {
 	}
 
 	return int64(len(data)), nil
+}
+
+// getLabelIdsForEmail extracts labels from email headers and resolves them to IDs
+func (i *Importer) getLabelIdsForEmail(data []byte) []string {
+	// Check if --labels flag is set (command-line labels)
+	if i.config.Labels != "" {
+		logrus.WithField("labels", i.config.Labels).Debug("Using --labels flag")
+		// Use command-line labels (cached)
+		if len(i.labelIds) == 0 {
+			i.labelCacheMutex.Lock()
+			if len(i.labelIds) == 0 {
+				// Resolve labels from command line
+				labelNames := strings.Split(i.config.Labels, ",")
+				for _, name := range labelNames {
+					name = strings.TrimSpace(name)
+					if name == "" {
+						continue
+					}
+					if labelId := i.resolveLabelName(name); labelId != "" {
+						i.labelIds = append(i.labelIds, labelId)
+					}
+				}
+			}
+			i.labelCacheMutex.Unlock()
+		}
+		return i.labelIds
+	}
+
+	// Extract labels from X-Gmail-Labels header
+	emailLabels := i.extractLabelsFromHeaders(data)
+	if len(emailLabels) == 0 {
+		return nil
+	}
+
+	// Resolve label names to IDs
+	labelIds := make([]string, 0, len(emailLabels))
+	for _, labelName := range emailLabels {
+		labelName = strings.TrimSpace(labelName)
+		if labelName == "" {
+			continue
+		}
+		if labelId := i.resolveLabelName(labelName); labelId != "" {
+			labelIds = append(labelIds, labelId)
+		}
+	}
+
+	logrus.WithFields(logrus.Fields{"email_labels": emailLabels, "resolved_count": len(labelIds)}).Debug("Processed email labels")
+	return labelIds
+}
+
+// extractLabelsFromHeaders extracts label names from the X-Gmail-Labels header
+func (i *Importer) extractLabelsFromHeaders(data []byte) []string {
+	dataStr := string(data)
+
+	// Find the X-Gmail-Labels header
+	headerPrefix := "\nX-Gmail-Labels:"
+	idx := strings.Index(dataStr, headerPrefix)
+	if idx == -1 {
+		return nil
+	}
+
+	// Extract the header value (up to the next line that doesn't start with whitespace)
+	start := idx + len(headerPrefix)
+	end := len(dataStr)
+
+	// Find the end of the header value (next line that doesn't start with whitespace)
+	for i := start; i < len(dataStr); i++ {
+		if dataStr[i] == '\n' && (i+1 >= len(dataStr) || (dataStr[i+1] != ' ' && dataStr[i+1] != '\t' && dataStr[i+1] != '\r')) {
+			end = i
+			break
+		}
+	}
+
+	// Extract and parse the label list
+	labelValue := strings.TrimSpace(dataStr[start:end])
+	if labelValue == "" {
+		return nil
+	}
+
+	// Split by comma and trim whitespace
+	labels := strings.Split(labelValue, ",")
+	result := make([]string, 0, len(labels))
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label != "" {
+			result = append(result, label)
+		}
+	}
+
+	return result
+}
+
+// normalizeLabelName normalizes label names from X-Gmail-Labels header to Gmail API format
+func (i *Importer) normalizeLabelName(labelName string) string {
+	// Common mappings from X-Gmail-Labels to Gmail API
+	mappings := map[string]string{
+		"Important":           "IMPORTANT",
+		"Starred":             "STARRED",
+		"Unread":              "UNREAD",
+		"Category Personal":   "CATEGORY_PERSONAL",
+		"Category Social":     "CATEGORY_SOCIAL",
+		"Category Updates":    "CATEGORY_UPDATES",
+		"Category Forums":     "CATEGORY_FORUMS",
+		"Category Promotions": "CATEGORY_PROMOTIONS",
+	}
+
+	// Check for known mappings
+	if mapped, ok := mappings[labelName]; ok {
+		return mapped
+	}
+
+	// Convert "Category XXX" to "CATEGORY_XXX"
+	if strings.HasPrefix(labelName, "Category ") {
+		category := strings.TrimPrefix(labelName, "Category ")
+		category = strings.ToUpper(strings.ReplaceAll(category, " ", "_"))
+		return "CATEGORY_" + category
+	}
+
+	// Try uppercase for system labels
+	upper := strings.ToUpper(labelName)
+	if upper == "IMPORTANT" || upper == "STARRED" || upper == "INBOX" ||
+		upper == "SENT" || upper == "DRAFT" || upper == "SPAM" ||
+		upper == "TRASH" || upper == "UNREAD" || upper == "CHAT" {
+		return upper
+	}
+
+	// Return as-is for user-defined labels
+	return labelName
+}
+
+// resolveLabelName resolves a single label name to its ID (with caching)
+func (i *Importer) resolveLabelName(labelName string) string {
+	// Normalize label name first
+	normalizedName := i.normalizeLabelName(labelName)
+
+	// Check cache first
+	i.labelCacheMutex.RLock()
+	if labelId, ok := i.labelCache[normalizedName]; ok {
+		i.labelCacheMutex.RUnlock()
+		return labelId
+	}
+	i.labelCacheMutex.RUnlock()
+
+	// Fetch all labels if not already done
+	if !i.allLabelsFetched {
+		i.labelCacheMutex.Lock()
+		if !i.allLabelsFetched {
+			labelsResp, err := i.gmailService.Users.Labels.List("me").Do()
+			if err != nil {
+				i.labelCacheMutex.Unlock()
+				logrus.WithError(err).WithField("label", labelName).Warn("Failed to fetch labels, skipping")
+				return ""
+			}
+			logrus.WithField("count", len(labelsResp.Labels)).Debug("Fetched labels from Gmail")
+			for _, label := range labelsResp.Labels {
+				i.labelCache[label.Name] = label.Id
+			}
+			i.allLabelsFetched = true
+		}
+		i.labelCacheMutex.Unlock()
+	}
+
+	// Check cache again after fetching
+	i.labelCacheMutex.RLock()
+	labelId, ok := i.labelCache[normalizedName]
+	i.labelCacheMutex.RUnlock()
+
+	if !ok {
+		logrus.WithField("label", labelName).Debug("Label not found, skipping")
+		return ""
+	}
+
+	return labelId
 }
 
 // validateConfig validates the importer configuration

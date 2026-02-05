@@ -23,8 +23,13 @@ The import command uses separate credentials from export to allow importing into
 Gmail account. Use --import-credentials and --import-token to specify different authentication
 files for the destination account.
 
+LABELS:
+Use --labels to apply Gmail labels to imported emails. Labels are specified as a
+comma-separated list of label names (e.g., --labels "tickets,music"). The tool will
+automatically resolve label names to their corresponding Gmail label IDs.
+
 Use --limit to process only a specific number of messages, which is useful for testing
-the import process with a small number of messages before running a full import.`,
+import process with a small number of messages before running a full import.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Build import configuration from flags
 		importConfig, err := buildImportConfig(cmd)
@@ -72,6 +77,7 @@ func init() {
 	importCmd.Flags().Int("parallel-workers", 3, "Number of parallel workers")
 	importCmd.Flags().Bool("preserve-dates", true, "Preserve original email dates")
 	importCmd.Flags().IntP("limit", "l", 0, "Limit the number of messages to process (0 = no limit, useful for testing)")
+	importCmd.Flags().String("labels", "", "Gmail labels to apply to imported emails (comma-separated)")
 }
 
 func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
@@ -104,6 +110,9 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	}
 	if limit, _ := cmd.Flags().GetInt("limit"); limit > 0 {
 		config.Limit = limit
+	}
+	if labels, _ := cmd.Flags().GetString("labels"); labels != "" {
+		config.Labels = labels
 	}
 
 	// Validate required fields
