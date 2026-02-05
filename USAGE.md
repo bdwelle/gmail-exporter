@@ -137,24 +137,29 @@ credentials_file: "~/.gmail-exporter/credentials.json"
 token_file: "~/.gmail-exporter/token.json"
 
 # Default Export Settings
-output_dir: "./exports"
-organize_by_labels: false
-parallel_workers: 3
+ output_dir: "./exports"
+ organize_by_labels: false
+ parallel_workers: 3
 
 # Default Filters
-filters:
+ filters:
   exclude_chats: true
   search_scope: "all_mail"
 
 # Metrics Configuration
-metrics:
-  enabled: true
-  format: "json"
-  output_file: "metrics.json"
+ metrics:
+   enabled: true
+   format: "json"
+   output_file: "metrics.json"
 
 # Logging
-log_level: "info"
-log_file: ""
+ log_level: "info"
+ log_file: ""
+
+# Import Settings (optional)
+# skip_duplicates: false  # Skip emails already in Gmail (based on Message-ID)
+# labels: ""  # Override email labels (comma-separated)
+```
 ```
 
 ## Step 7: Monitoring and Metrics
@@ -178,6 +183,124 @@ After an export operation, check the metrics file:
 ```bash
 cat ./exports/metrics.json
 ```
+
+## Import Usage
+
+The import command allows you to import previously exported emails into a Gmail account. This is useful for:
+- Migrating emails between Gmail accounts
+- Restoring emails from backups
+- Importing emails from other email systems (after export)
+- Testing import functionality
+
+### Basic Import
+
+```bash
+./gmail-exporter import --input-dir ./exports
+```
+
+### Import with Label Preservation
+
+Emails exported from Gmail contain `X-Gmail-Labels` headers. The importer automatically extracts these labels and applies them during import:
+
+```bash
+./gmail-exporter import --input-dir ./exports
+```
+
+Labels are automatically:
+- Extracted from `X-Gmail-Labels` header
+- Normalized to Gmail API format (e.g., "Category Personal" → "CATEGORY_PERSONAL")
+- Resolved to actual Gmail label IDs
+
+### Import with Custom Labels
+
+Override email labels with your own labels:
+
+```bash
+./gmail-exporter import \
+  --input-dir ./exports \
+  --labels "important,work,projects"
+```
+
+This is useful when:
+- You want to reorganize emails during import
+- Exported emails have missing or incorrect labels
+- Migrating to a different label structure
+
+### Import with Deduplication
+
+Avoid importing duplicate emails by checking Message-ID against Gmail before importing:
+
+```bash
+./gmail-exporter import \
+  --input-dir ./exports \
+  --skip-duplicates
+```
+
+**When to use `--skip-duplicates`:**
+- Re-running imports after failures
+- Testing import process multiple times
+- Importing from multiple mbox files that may overlap
+- Any scenario where you might run import twice on the same data
+
+**How deduplication works:**
+1. Extracts `Message-ID` from email headers (RFC 5322 format)
+2. Queries Gmail API with `rfc822msgid:<id>` to check if message exists
+3. Skips import if message already found in Gmail
+4. Reports count of skipped duplicates in output
+
+### Complete Import Workflow
+
+Here's a complete workflow for migrating emails from one account to another:
+
+```bash
+# Step 1: Export from source account
+./gmail-exporter export \
+  --to "old-account@gmail.com" \
+  --output-dir migration-exports \
+  --organize-by-labels
+
+# Step 2: Test import with a few messages
+./gmail-exporter import \
+  --input-dir migration-exports \
+  --limit 10 \
+  --skip-duplicates
+
+# Step 3: If test successful, import all
+./gmail-exporter import \
+  --input-dir migration-exports \
+  --skip-duplicates \
+  --parallel-workers 3
+```
+
+### Import Configuration
+
+You can set import-specific options in your config file:
+
+```yaml
+# ~/.gmail-exporter.yaml
+import:
+  input_dir: "./exports"
+  parallel_workers: 3
+  preserve_dates: true
+  skip_duplicates: false  # Enable to avoid duplicates
+  labels: ""  # Override with comma-separated labels
+```
+
+### Import Metrics
+
+After import completes, check the metrics file:
+
+```bash
+cat import_metrics.json
+```
+
+This includes:
+- `total_found`: Total files processed
+- `total_imported`: Successfully imported emails
+- `total_failed`: Failed imports
+- `total_skipped`: Duplicates skipped (with --skip-duplicates)
+- `total_size`: Total size imported
+- `duration`: Time taken
 
 ## Common Use Cases
 
@@ -214,10 +337,13 @@ cat ./exports/metrics.json
 
 ```bash
 ./gmail-exporter export \
+  --to "user@example.com" \
   --labels "important,work" \
   --organize-by-labels \
   --output-dir ./labeled-emails
 ```
+
+**Note:** Labels are preserved in exports via `X-Gmail-Labels` header and will be automatically applied when importing to another Gmail account.
 
 ### 5. Complete Workflow (Export + Forward + Archive)
 
@@ -227,6 +353,27 @@ cat ./exports/metrics.json
   --destination "backup@example.com" \
   --cleanup-action archive \
   --output-dir ./exports
+```
+
+### 6. Safe Import Testing
+
+When testing imports, use deduplication to avoid creating test duplicates in Gmail:
+
+```bash
+# First, export a small test set
+./gmail-exporter export \
+  --to "test@example.com" \
+  --limit 5 \
+  --output-dir test-exports
+
+# Test import with deduplication enabled
+./gmail-exporter import \
+  --input-dir test-exports \
+  --skip-duplicates \
+  --limit 5
+
+# If successful, you can re-run import without --skip-duplicates on the full export
+# without creating duplicate emails
 ```
 
 ## Troubleshooting
@@ -288,11 +435,24 @@ For large exports:
 | `--size-less-than` | Email size threshold | `--size-less-than "10MB"` |
 | `--date-within` | Date range | `--date-within "30d"` |
 | `--date-after` | After specific date | `--date-after "2024-01-01"` |
-| `--date-before` | Before specific date | `--date-before "2024-12-31"` |
+ | `--date-before` | Before specific date | `--date-before "2024-12-31"` |
 | `--has-attachment` | Has attachments | `--has-attachment` |
 | `--no-attachment` | No attachments | `--no-attachment` |
 | `--exclude-chats` | Exclude chat messages | `--exclude-chats` |
 | `--labels` | Specific labels | `--labels "important,work"` |
+
+## Import Filter Reference
+
+| Flag | Description | Example |
+|--------|-------------|---------|
+| `--input-dir` | Input directory containing exported emails | `--input-dir ./exports` |
+| `--import-credentials` | Gmail API credentials file for destination account | `--import-credentials dest-creds.json` |
+| `--import-token` | OAuth token file for destination account | `--import-token dest-token.json` |
+| `--parallel-workers` | Number of parallel workers | `--parallel-workers 3` |
+| `--preserve-dates` | Preserve original email dates | `--preserve-dates` |
+| `--limit` | Limit to number of messages to process | `--limit 100` |
+| `--labels` | Gmail labels to apply to imported emails (overrides X-Gmail-Labels header) | `--labels "tickets,music"` |
+| `--skip-duplicates` | Skip emails that already exist in Gmail (based on Message-ID) | `--skip-duplicates` |
 
 ## Security Notes
 
@@ -381,7 +541,8 @@ Here's a complete example of migrating emails from one account to another:
   --import-credentials dest-gmail-credentials.json \
   --import-token dest-gmail-token.json \
   --limit 5 \
-  --preserve-dates
+  --preserve-dates \
+  --skip-duplicates
 
 # Step 3: If test successful, import all
 ./gmail-exporter import \
@@ -389,15 +550,8 @@ Here's a complete example of migrating emails from one account to another:
   --import-credentials dest-gmail-credentials.json \
   --import-token dest-gmail-token.json \
   --preserve-dates \
+  --skip-duplicates \
   --parallel-workers 3
-
-# Step 4: Optional - Clean up source account
-./gmail-exporter cleanup \
-  --credentials-file source-gmail-credentials.json \
-  --token-file source-gmail-token.json \
-  --action archive \
-  --filter-file migration-2024/processed_emails.json \
-  --dry-run  # Remove this flag when ready to execute
 ```
 
 ### Account-Specific Configuration
@@ -566,15 +720,21 @@ Before running large migrations:
 ### Import Issues
 
 **Problem:** Emails not appearing in destination account
-
 - Verify you're using correct destination credentials
 - Check that import completed without errors
 - Look in "All Mail" folder, not just Inbox
 
 **Problem:** Duplicate emails during import
+- Use `--skip-duplicates` flag to avoid importing emails that already exist in Gmail
+- This checks for duplicates by Message-ID before importing
+- Useful when re-running imports after failures or testing
+- With `--skip-duplicates` enabled, check output for "Total emails skipped (duplicates)" count
 
-- This was a bug in earlier versions - ensure you're using latest version
-- The tool now uses Gmail API Import instead of Send
+**Problem:** Labels not being applied
+- Ensure emails have `X-Gmail-Labels` header when exported
+- Check that label names match your Gmail labels (case-sensitive)
+- Use `--labels` flag to override email labels if needed
+- Labels like "Archived" and "Opened" are skipped (they're not Gmail labels)
 
 ### Performance Issues
 
