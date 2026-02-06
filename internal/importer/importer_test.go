@@ -161,24 +161,34 @@ func TestNormalizeLabelName(t *testing.T) {
 			expected: "UNREAD",
 		},
 		{
-			name:     "Category Personal",
+			name:     "Category Personal (system-managed)",
 			input:    "Category Personal",
-			expected: "CATEGORY_PERSONAL",
+			expected: "", // Gmail categories are system-managed and cannot be set via API
 		},
 		{
-			name:     "Category Social",
+			name:     "Category Social (system-managed)",
 			input:    "Category Social",
-			expected: "CATEGORY_SOCIAL",
+			expected: "", // Gmail categories are system-managed and cannot be set via API
 		},
 		{
-			name:     "Category Updates",
+			name:     "Category Updates (system-managed)",
 			input:    "Category Updates",
-			expected: "CATEGORY_UPDATES",
+			expected: "", // Gmail categories are system-managed and cannot be set via API
 		},
 		{
-			name:     "Category Forums",
+			name:     "Category Forums (system-managed)",
 			input:    "Category Forums",
-			expected: "CATEGORY_FORUMS",
+			expected: "", // Gmail categories are system-managed and cannot be set via API
+		},
+		{
+			name:     "Category Purchases (system-managed)",
+			input:    "Category Purchases",
+			expected: "", // Gmail categories are system-managed and cannot be set via API
+		},
+		{
+			name:     "Category Promotions (system-managed)",
+			input:    "Category Promotions",
+			expected: "", // Gmail categories are system-managed and cannot be set via API
 		},
 		{
 			name:     "user-defined label",

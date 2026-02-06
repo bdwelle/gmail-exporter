@@ -27,10 +27,12 @@ type Config struct {
 	PreserveDates      bool   `json:"preserve_dates"`
 	Limit              int    `json:"limit"`
 	Labels             string `json:"labels"`
+	AddLabel           string `json:"add_label"`
 	SkipDuplicates     bool   `json:"skip_duplicates"`
 	SkipInboxLabel     bool   `json:"skip_inbox_label"`
 	SkipImportantLabel bool   `json:"skip_important_label"`
 	SkipStarredLabel   bool   `json:"skip_starred_label"`
+	SkipCategories     bool   `json:"skip_categories"`
 }
 
 // Result represents the import operation result
@@ -238,8 +240,14 @@ func (i *Importer) importEmails(emailFiles []string) (*Result, error) {
 
 		// Show progress (imported + skipped)
 		completed := result.TotalImported + result.TotalSkipped
-		fmt.Printf("\rProgress: %d of %d messages processed (%.1f%%)",
-			completed, total, float64(processed)/float64(total)*100)
+		// Add newline after progress if debug logging is enabled to avoid running into debug lines
+		if logrus.IsLevelEnabled(logrus.DebugLevel) {
+			fmt.Printf("\rProgress: %d of %d messages processed (%.1f%%)\n",
+				completed, total, float64(processed)/float64(total)*100)
+		} else {
+			fmt.Printf("\rProgress: %d of %d messages processed (%.1f%%)",
+				completed, total, float64(processed)/float64(total)*100)
+		}
 	}
 	fmt.Println() // New line after progress
 
@@ -392,6 +400,9 @@ func (i *Importer) importMboxFile(data []byte) (int64, error) {
 
 // getLabelIdsForEmail extracts labels from email headers and resolves them to IDs
 func (i *Importer) getLabelIdsForEmail(data []byte) []string {
+	var labelIds []string
+	var emailLabels []string
+
 	// Check if --labels flag is set (command-line labels)
 	if i.config.Labels != "" {
 		logrus.WithField("labels", i.config.Labels).Debug("Using --labels flag")
@@ -413,28 +424,68 @@ func (i *Importer) getLabelIdsForEmail(data []byte) []string {
 			}
 			i.labelCacheMutex.Unlock()
 		}
-		return i.labelIds
-	}
+		labelIds = i.labelIds
+	} else {
+		// Extract labels from X-Gmail-Labels header
+		emailLabels = i.extractLabelsFromHeaders(data)
 
-	// Extract labels from X-Gmail-Labels header
-	emailLabels := i.extractLabelsFromHeaders(data)
-	if len(emailLabels) == 0 {
-		return nil
-	}
+		if len(emailLabels) == 0 {
+			logrus.Debug("No labels found in email headers")
+		} else {
+			// Resolve label names to IDs
+			labelIds = make([]string, 0, len(emailLabels))
+			for _, labelName := range emailLabels {
+				labelName = strings.TrimSpace(labelName)
+				if labelName == "" {
+					continue
+				}
+				if labelId := i.resolveLabelName(labelName); labelId != "" {
+					labelIds = append(labelIds, labelId)
+				}
+			}
 
-	// Resolve label names to IDs
-	labelIds := make([]string, 0, len(emailLabels))
-	for _, labelName := range emailLabels {
-		labelName = strings.TrimSpace(labelName)
-		if labelName == "" {
-			continue
+			logrus.WithFields(logrus.Fields{"email_labels": emailLabels, "resolved_count": len(labelIds)}).Debug("Processed email labels")
+
+			// Log the actual labels that will be applied (only when debug level is enabled)
+			if logrus.IsLevelEnabled(logrus.DebugLevel) {
+				if len(labelIds) > 0 {
+					logrus.WithFields(logrus.Fields{
+						"email_labels": emailLabels,
+						"label_ids":    labelIds,
+					}).Debug("Labels that will be applied to email")
+				} else if len(emailLabels) > 0 {
+					logrus.WithFields(logrus.Fields{
+						"email_labels": emailLabels,
+					}).Debug("No labels could be resolved from email headers")
+				}
+			}
 		}
-		if labelId := i.resolveLabelName(labelName); labelId != "" {
-			labelIds = append(labelIds, labelId)
+	}
+
+	// Add --add-label if specified (this adds to whatever labels are already set)
+	if i.config.AddLabel != "" {
+		addLabel := strings.TrimSpace(i.config.AddLabel)
+		if addLabel != "" {
+			addLabelId := i.resolveLabelName(addLabel)
+			if addLabelId != "" {
+				// Check if label is already in the list to avoid duplicates
+				alreadyPresent := false
+				for _, id := range labelIds {
+					if id == addLabelId {
+						alreadyPresent = true
+						break
+					}
+				}
+				if !alreadyPresent {
+					labelIds = append(labelIds, addLabelId)
+					logrus.WithFields(logrus.Fields{"add_label": addLabel, "label_id": addLabelId}).Debug("Added --add-label to email")
+				}
+			} else {
+				logrus.WithField("add_label", addLabel).Warn("--add-label not found in Gmail, will not be applied")
+			}
 		}
 	}
 
-	logrus.WithFields(logrus.Fields{"email_labels": emailLabels, "resolved_count": len(labelIds)}).Debug("Processed email labels")
 	return labelIds
 }
 
@@ -482,28 +533,31 @@ func (i *Importer) extractLabelsFromHeaders(data []byte) []string {
 
 // normalizeLabelName normalizes label names from X-Gmail-Labels header to Gmail API format
 func (i *Importer) normalizeLabelName(labelName string) string {
+	// Check if this is a Gmail category label
+	if strings.HasPrefix(labelName, "Category ") {
+		// Gmail categories (Purchases, Personal, Social, Updates, Forums, Promotions)
+		// are system-managed and cannot be set via API during import
+		if i.config != nil && i.config.SkipCategories {
+			logrus.WithField("category", labelName).Debug("Skipping Gmail category per --skip-categories flag (email will still be imported)")
+			return ""
+		}
+		if i.config != nil {
+			logrus.WithField("category", labelName).Warn("Gmail categories are system-managed and cannot be applied during import (email will still be imported)")
+			logrus.WithField("suggestion", "Use --skip-categories to suppress this warning").Info("Suggestion")
+		}
+		return ""
+	}
+
 	// Common mappings from X-Gmail-Labels to Gmail API
 	mappings := map[string]string{
-		"Important":           "IMPORTANT",
-		"Starred":             "STARRED",
-		"Unread":              "UNREAD",
-		"Category Personal":   "CATEGORY_PERSONAL",
-		"Category Social":     "CATEGORY_SOCIAL",
-		"Category Updates":    "CATEGORY_UPDATES",
-		"Category Forums":     "CATEGORY_FORUMS",
-		"Category Promotions": "CATEGORY_PROMOTIONS",
+		"Important": "IMPORTANT",
+		"Starred":   "STARRED",
+		"Unread":    "UNREAD",
 	}
 
 	// Check for known mappings
 	if mapped, ok := mappings[labelName]; ok {
 		return mapped
-	}
-
-	// Convert "Category XXX" to "CATEGORY_XXX"
-	if strings.HasPrefix(labelName, "Category ") {
-		category := strings.TrimPrefix(labelName, "Category ")
-		category = strings.ToUpper(strings.ReplaceAll(category, " ", "_"))
-		return "CATEGORY_" + category
 	}
 
 	// Try uppercase for system labels
@@ -523,15 +577,15 @@ func (i *Importer) resolveLabelName(labelName string) string {
 	// Skip labels if configured
 	upper := strings.ToUpper(labelName)
 	if upper == "INBOX" && i.config.SkipInboxLabel {
-		logrus.WithField("label", labelName).Debug("Skipping Inbox label per configuration")
+		logrus.WithField("label", labelName).Debug("Skipping Inbox label per --no-inbox flag (email will still be imported)")
 		return ""
 	}
 	if upper == "IMPORTANT" && i.config.SkipImportantLabel {
-		logrus.WithField("label", labelName).Debug("Skipping Important label per configuration")
+		logrus.WithField("label", labelName).Debug("Skipping Important label per --no-important flag (email will still be imported)")
 		return ""
 	}
 	if upper == "STARRED" && i.config.SkipStarredLabel {
-		logrus.WithField("label", labelName).Debug("Skipping Starred label per configuration")
+		logrus.WithField("label", labelName).Debug("Skipping Starred label per --no-starred flag (email will still be imported)")
 		return ""
 	}
 
@@ -571,7 +625,7 @@ func (i *Importer) resolveLabelName(labelName string) string {
 	i.labelCacheMutex.RUnlock()
 
 	if !ok {
-		logrus.WithField("label", labelName).Debug("Label not found, skipping")
+		logrus.WithField("label", labelName).Debug("Label not found in Gmail, skipping this label (email will still be imported)")
 		return ""
 	}
 

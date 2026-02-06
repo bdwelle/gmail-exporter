@@ -11,23 +11,27 @@ def is_valid_mbox(file_path):
     """Check if file appears to be a valid mbox file"""
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            first_chunk = f.read(1000)
+            first_chunk = f.read(5000)
 
         # Check for common mbox patterns
-        return "From " in first_chunk and ("\nFrom " in first_chunk[:2000])
+        # Gmail mbox files may start with metadata, so check deeper in the file
+        return "From " in first_chunk
     except Exception as e:
         print(f"Warning: Could not validate file: {e}", file=sys.stderr)
         return True
 
 
-def split_mbox(mbox_path, output_dir, verbose=False, counter=None):
+def split_mbox(
+    mbox_path, output_dir, verbose=False, counter=None, progress_callback=None
+):
     """Split an mbox file into individual .eml files
 
     Args:
-        mbox_path: Path to the .mbox file
+        mbox_path: Path to .mbox file
         output_dir: Directory to save split .eml files
         verbose: Enable verbose output for debugging
         counter: Starting message number (for processing multiple files)
+        progress_callback: Function to call with progress updates (file, count, total)
 
     Returns:
         tuple: (int messages saved, int new counter value)
@@ -36,15 +40,29 @@ def split_mbox(mbox_path, output_dir, verbose=False, counter=None):
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
+    filename = os.path.basename(mbox_path)
+    file_size = os.path.getsize(mbox_path)
+    file_size_mb = file_size / (1024 * 1024)
+
     if verbose:
         print(f"Reading mbox file: {mbox_path}", file=sys.stderr)
         print(f"Output directory: {output_dir}", file=sys.stderr)
+
+    # Show file info
+    print(f"Processing: {filename} ({file_size_mb:.1f} MB)", file=sys.stderr)
 
     with open(mbox_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
     # Split by "From " lines (mbox format)
     messages = re.split(r"\nFrom ", content)
+    total_in_file = len(messages)
+
+    # Estimate total messages (skip first if empty)
+    estimated_total = max(0, total_in_file - 1)
+
+    print(f"  Estimated messages: {estimated_total}", file=sys.stderr)
+    print("", file=sys.stderr)
 
     count = 0
     skipped = 0
@@ -53,6 +71,10 @@ def split_mbox(mbox_path, output_dir, verbose=False, counter=None):
     # Use provided counter or start at 1
     if counter is None:
         counter = 1
+
+    # Progress tracking
+    last_progress = 0
+    progress_interval = max(1, estimated_total // 20)  # Update 20 times max
 
     for i, msg in enumerate(messages):
         msg = msg.strip()
@@ -95,13 +117,21 @@ def split_mbox(mbox_path, output_dir, verbose=False, counter=None):
                 out.write(msg)
             count += 1
             counter += 1
+
+            # Show progress via callback
+            if progress_callback:
+                progress_callback(filename, count, estimated_total)
+
+            # Show detailed progress (only in verbose mode)
             if verbose and count % 10 == 0:
                 print(f"  Processed {count} messages...", file=sys.stderr)
+
         except Exception as e:
             print(f"Error writing message {i}: {e}", file=sys.stderr)
             continue
 
-    print(f"✓ Split {count} messages to {output_dir}/")
+    print(f"\r", file=sys.stderr)  # Clear the progress line
+    print(f"✓ Split {count} messages to {output_dir}/", file=sys.stderr)
     if skipped > 0:
         print(f"  Skipped {skipped} empty/invalid messages", file=sys.stderr)
     if empty > 0:
@@ -202,13 +232,57 @@ if __name__ == "__main__":
     # Split all mbox files with a shared counter
     counter = 1
     total_messages = 0
+    total_files = len(mbox_files)
+    global_progress = {}
 
-    for mbox_file in mbox_files:
+    print(f"Total files to process: {total_files}", file=sys.stderr)
+    print("", file=sys.stderr)
+
+    for idx, mbox_file in enumerate(mbox_files, 1):
+        filename = os.path.basename(mbox_file)
         if verbose:
             print(f"\n{'=' * 50}", file=sys.stderr)
             print(f"Processing: {mbox_file}", file=sys.stderr)
+        else:
+            print(f"\n[{idx}/{total_files}] Processing: {filename}...", file=sys.stderr)
 
-        count, counter = split_mbox(mbox_file, output_dir, verbose, counter)
+        # Progress tracking for this file
+        with open(mbox_file, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+            messages = re.split(r"\nFrom ", content)
+            file_size = os.path.getsize(mbox_file)
+            file_size_mb = file_size / (1024 * 1024)
+            estimated_total = max(0, len(messages) - 1)
+
+        print(f"  Size: {file_size_mb:.1f} MB", file=sys.stderr)
+        print(f"  Estimated: {estimated_total} messages", file=sys.stderr)
+        print("", file=sys.stderr)
+
+        # Progress tracking for this file
+        global_progress[filename] = {
+            "count": 0,
+            "total": estimated_total,
+            "last_update": 0,
+        }
+
+        # Progress callback
+        def show_progress(filename, count, total):
+            # Only show progress in non-verbose mode
+            if not verbose:
+                pct = (count / total * 100) if total > 0 else 100
+                bar_width = 30
+                filled = int(bar_width * pct / 100)
+                bar = "█" * filled + "░" * (bar_width - filled)
+                print(
+                    f"\r    [{bar}] {count:5d}/{total} ({pct:5.1f}%)",
+                    end="",
+                    file=sys.stderr,
+                )
+                sys.stderr.flush()
+
+        count, counter = split_mbox(
+            mbox_file, output_dir, verbose, counter, show_progress
+        )
         total_messages += count
 
     print(
@@ -217,47 +291,4 @@ if __name__ == "__main__":
 
     if total_messages == 0:
         print(f"Error: No valid emails found", file=sys.stderr)
-        sys.exit(1)
-
-    # Parse arguments
-    mbox_path = sys.argv[1]
-    output_dir = "2-split-to-import"
-    verbose = False
-
-    i = 2
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-
-        if arg in ["-v", "--verbose"]:
-            verbose = True
-            i += 1
-        elif not arg.startswith("-"):
-            output_dir = arg
-            i += 1
-        else:
-            print(f"Error: Unknown argument: {arg}", file=sys.stderr)
-            sys.exit(1)
-
-    # Validate input file
-    if not os.path.exists(mbox_path):
-        print(f"Error: File not found: {mbox_path}")
-        sys.exit(1)
-
-    if not os.path.isfile(mbox_path):
-        print(f"Error: {mbox_path} is not a file")
-        sys.exit(1)
-
-    # Check if it's a valid mbox file
-    if not is_valid_mbox(mbox_path):
-        print(
-            f"Warning: {mbox_path} does not appear to be a valid mbox file",
-            file=sys.stderr,
-        )
-        print("Proceeding anyway...", file=sys.stderr)
-
-    # Split the mbox file
-    count = split_mbox(mbox_path, output_dir, verbose)
-
-    if count == 0:
-        print(f"Error: No valid emails found in {mbox_path}", file=sys.stderr)
         sys.exit(1)

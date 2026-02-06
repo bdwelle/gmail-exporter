@@ -1,0 +1,114 @@
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  Gmail Import Flags Quick Reference                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─ Basic Flags ─────────────────────────────────────────────────────────┐
+│                                                              │
+│  --skip-duplicates    Skip emails already in Gmail (always use)    │
+│  --skip-categories    Skip Gmail category labels (always use)      │
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Inbox Messages ─────────────────────────────────────────────────────┐
+│                                                              │
+│  --no-inbox          Don't add Inbox label               │
+│  --no-starred        Don't add Starred label             │
+│  --no-important      Don't add Important label           │
+│                                                              │
+│  Example:                                                    │
+│  ./gmail-exporter import --skip-duplicates --no-inbox \       │
+│    --no-starred --no-important --skip-categories \             │
+│    --input-dir 2-split-to-import --add-label="import-2026-02-05"│
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Sent Messages ──────────────────────────────────────────────────────┐
+│                                                              │
+│  --no-inbox          Don't add to Inbox (they go to Sent)   │
+│                                                              │
+│  Example:                                                    │
+│  ./gmail-exporter import --skip-duplicates --no-inbox \       │
+│    --skip-categories \                                     │
+│    --input-dir 2-split-to-import --add-label="import-sent-2026-02-05"│
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Starred Messages ────────────────────────────────────────────────────┐
+│                                                              │
+│  --no-inbox          Don't add to Inbox                   │
+│  --no-starred        Don't add Starred label (they're already)   │
+│                                                              │
+│  Example:                                                    │
+│  ./gmail-exporter import --skip-duplicates --no-inbox \       │
+│    --no-starred --skip-categories \                        │
+│    --input-dir 2-split-to-import --add-label="import-starred-2026-02-05"│
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Archived Messages ───────────────────────────────────────────────────┐
+│                                                              │
+│  --no-inbox          Don't add to Inbox                │
+│                                                              │
+│  Example:                                                    │
+│  ./gmail-exporter import --skip-duplicates --no-inbox \       │
+│    --skip-categories \                                     │
+│    --input-dir 2-split-to-import --add-label="import-archived-2026-02-05"│
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Category Labels (Personal, Social, Purchases, etc.) ────────────┐
+│                                                              │
+│  Gmail categories are SYSTEM-MANAGED and cannot be set via API      │
+│  They are automatically assigned by Gmail based on:                 │
+│    • Email content analysis                                     │
+│    • Sender reputation/patterns                                 │
+│    • Subject line patterns                                      │
+│                                                              │
+│  Always use --skip-categories to:                              │
+│    • Avoid warnings                                            │
+│    • Prevent API errors                                          │
+│    • Keep logs clean                                           │
+│                                                              │
+│  Note: Messages will still get categorized after import!              │
+│        Gmail's classifiers analyze them within minutes/hours.           │
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Label to Identify Imports ────────────────────────────────────────────┐
+│                                                              │
+│  --add-label="import-YYYY-MM-DD"                              │
+│                                                              │
+│  This label is added to ALL imported emails, making them:              │
+│    • Easy to find (search for import-YYYY-MM-DD)             │
+│    • Easy to filter (create filter for import-YYYY-MM-DD)       │
+│    • Easy to manage (archive/delete after verification)             │
+│                                                              │
+│  Requirements:                                                │
+│    • Label must exist in Gmail FIRST                             │
+│    • Create manually in Gmail web interface or via API                │
+│                                                              │
+│  Note: In batch script, date is auto-generated!                   │
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘
+
+┌─ Batch Import Script ──────────────────────────────────────────────────┐
+│                                                              │
+│  ./import-all.sh                                            │
+│                                                              │
+│  Automates importing all 4 main files:                          │
+│    1. Inbox.mbox    → import-inbox-YYYY-MM-DD              │
+│    2. Sent.mbox      → import-sent-YYYY-MM-DD                   │
+│    3. Starred.mbox   → import-starred-YYYY-MM-DD                │
+│    4. Archived.mbox  → import-archived-YYYY-MM-DD             │
+│                                                              │
+│  Features:                                                    │
+│    • Clear output directory between imports                      │
+│    • Colored progress output                                    │
+│    • Error handling                                             │
+│    • Auto-generates current date (YYYY-MM-DD)                    │
+│                                                              │
+│  Edit script to customize:                                       │
+│    • MAIL_DIR - Path to Google Takeout                          │
+│    • IMPORT_DATE - Date stamp for labels (auto: YYYY-MM-DD)     │
+│                                                              │
+└───────────────────────────────────────────────────────────────────────┘

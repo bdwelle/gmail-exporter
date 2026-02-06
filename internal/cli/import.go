@@ -27,6 +27,16 @@ files for the destination account.
 Use --labels to apply Gmail labels to imported emails. Labels are specified as a
 comma-separated list of label names (e.g., --labels "tickets,music"). The tool will
 automatically resolve label names to their corresponding Gmail label IDs.
+When --labels is used, it replaces any labels extracted from the email headers.
+
+Use --add-label to add a single label to all imported emails, in addition to any
+labels from the email headers or --labels flag. This is useful for identifying
+imported emails (e.g., --add-label="import-2026-0205").
+
+IMPORTANT: The label specified in --add-label must already exist in your Gmail account
+before running the import. You must create the label manually in Gmail's web interface
+or via the Gmail API first. If the label doesn't exist, the import will still succeed
+but the label won't be applied (a warning will be logged).
 
 DEDUPLICATION:
 Use --skip-duplicates to avoid importing emails that already exist in Gmail. This checks
@@ -41,6 +51,12 @@ labels without automatically adding them to the Inbox folder. When enabled, emai
 
 Use --no-important to prevent the "Important" label from being applied.
 Use --no-starred to prevent the "Starred" label from being applied.
+
+Use --skip-categories to prevent Gmail category labels from being applied. Gmail
+categories (Personal, Social, Promotions, Updates, Forums, Purchases) are
+system-managed labels that Gmail assigns automatically based on email content. These
+cannot be set via API during import and will be ignored by default. Use this flag
+to suppress the warning messages.
 
 Use --limit to process only a specific number of messages, which is useful for testing
 the import process with a small number of messages before running a full import.`,
@@ -94,11 +110,13 @@ func init() {
 	importCmd.Flags().Int("parallel-workers", 3, "Number of parallel workers")
 	importCmd.Flags().Bool("preserve-dates", true, "Preserve original email dates")
 	importCmd.Flags().IntP("limit", "l", 0, "Limit number of messages to process (0 = no limit, useful for testing)")
-	importCmd.Flags().String("labels", "", "Gmail labels to apply to imported emails (comma-separated)")
+	importCmd.Flags().String("labels", "", "Gmail labels to apply to imported emails (comma-separated, replaces email labels)")
+	importCmd.Flags().String("add-label", "", "Gmail label to add to all imported emails (label must exist in Gmail first)")
 	importCmd.Flags().Bool("skip-duplicates", false, "Skip emails that already exist in Gmail (based on Message-ID)")
 	importCmd.Flags().Bool("no-inbox", false, "Exclude Inbox label from imported emails (based on X-Gmail-Labels)")
 	importCmd.Flags().Bool("no-important", false, "Exclude Important label from imported emails (based on X-Gmail-Labels)")
 	importCmd.Flags().Bool("no-starred", false, "Exclude Starred label from imported emails (based on X-Gmail-Labels)")
+	importCmd.Flags().Bool("skip-categories", false, "Skip Gmail category labels (Personal, Social, Promotions, Updates, Forums, Purchases)")
 }
 
 func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
@@ -135,6 +153,9 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	if labels, _ := cmd.Flags().GetString("labels"); labels != "" {
 		config.Labels = labels
 	}
+	if addLabel, _ := cmd.Flags().GetString("add-label"); addLabel != "" {
+		config.AddLabel = addLabel
+	}
 	if skipDuplicates, _ := cmd.Flags().GetBool("skip-duplicates"); skipDuplicates {
 		config.SkipDuplicates = skipDuplicates
 	}
@@ -146,6 +167,9 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	}
 	if skipStarred, _ := cmd.Flags().GetBool("no-starred"); skipStarred {
 		config.SkipStarredLabel = skipStarred
+	}
+	if skipCategories, _ := cmd.Flags().GetBool("skip-categories"); skipCategories {
+		config.SkipCategories = skipCategories
 	}
 
 	// Validate required fields
