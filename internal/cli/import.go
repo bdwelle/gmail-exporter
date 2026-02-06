@@ -42,9 +42,6 @@ labels without automatically adding them to the Inbox folder. When enabled, emai
 Use --no-important to prevent the "Important" label from being applied.
 Use --no-starred to prevent the "Starred" label from being applied.
 
-Use --all-archived to archive all imported emails (removes INBOX label).
-This is useful when importing emails that should not appear in the inbox.
-
 Use --limit to process only a specific number of messages, which is useful for testing
 the import process with a small number of messages before running a full import.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -102,7 +99,6 @@ func init() {
 	importCmd.Flags().Bool("no-inbox", false, "Exclude Inbox label from imported emails (based on X-Gmail-Labels)")
 	importCmd.Flags().Bool("no-important", false, "Exclude Important label from imported emails (based on X-Gmail-Labels)")
 	importCmd.Flags().Bool("no-starred", false, "Exclude Starred label from imported emails (based on X-Gmail-Labels)")
-	importCmd.Flags().Bool("all-archived", false, "Archive all imported emails (removes INBOX label)")
 }
 
 func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
@@ -150,9 +146,6 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	}
 	if skipStarred, _ := cmd.Flags().GetBool("no-starred"); skipStarred {
 		config.SkipStarredLabel = skipStarred
-	}
-	if archiveAll, _ := cmd.Flags().GetBool("all-archived"); archiveAll {
-		config.ArchiveAll = archiveAll
 	}
 
 	// Validate required fields

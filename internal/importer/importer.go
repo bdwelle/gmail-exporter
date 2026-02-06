@@ -31,7 +31,6 @@ type Config struct {
 	SkipInboxLabel     bool   `json:"skip_inbox_label"`
 	SkipImportantLabel bool   `json:"skip_important_label"`
 	SkipStarredLabel   bool   `json:"skip_starred_label"`
-	ArchiveAll         bool   `json:"archive_all"`
 }
 
 // Result represents the import operation result
@@ -436,21 +435,6 @@ func (i *Importer) getLabelIdsForEmail(data []byte) []string {
 	}
 
 	logrus.WithFields(logrus.Fields{"email_labels": emailLabels, "resolved_count": len(labelIds)}).Debug("Processed email labels")
-
-	// Handle --all-archived flag: remove INBOX label if present
-	if i.config.ArchiveAll {
-		filteredLabels := make([]string, 0, len(labelIds))
-		for _, labelId := range labelIds {
-			if labelId != "INBOX" {
-				filteredLabels = append(filteredLabels, labelId)
-			}
-		}
-		if len(filteredLabels) < len(labelIds) {
-			logrus.Debug("Removing INBOX label due to --all-archived flag")
-		}
-		return filteredLabels
-	}
-
 	return labelIds
 }
 
