@@ -33,14 +33,20 @@ Use --skip-duplicates to avoid importing emails that already exist in Gmail. Thi
 for existing messages by Message-ID before importing. Enabling this will skip duplicates
 and log the count of skipped messages.
 
-INBOX LABEL EXCLUSION:
+LABEL EXCLUSION:
 Use --no-inbox to prevent the "Inbox" label from being applied to imported
 emails. This is useful when you want imported emails to inherit their original
 labels without automatically adding them to the Inbox folder. When enabled, emails with
 "Inbox" in their X-Gmail-Labels header will have that label excluded during import.
 
+Use --no-important to prevent the "Important" label from being applied.
+Use --no-starred to prevent the "Starred" label from being applied.
+
+Use --all-archived to archive all imported emails (removes INBOX label).
+This is useful when importing emails that should not appear in the inbox.
+
 Use --limit to process only a specific number of messages, which is useful for testing
--import process with a small number of messages before running a full import.`,
+the import process with a small number of messages before running a full import.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Build import configuration from flags
 		importConfig, err := buildImportConfig(cmd)
@@ -94,6 +100,9 @@ func init() {
 	importCmd.Flags().String("labels", "", "Gmail labels to apply to imported emails (comma-separated)")
 	importCmd.Flags().Bool("skip-duplicates", false, "Skip emails that already exist in Gmail (based on Message-ID)")
 	importCmd.Flags().Bool("no-inbox", false, "Exclude Inbox label from imported emails (based on X-Gmail-Labels)")
+	importCmd.Flags().Bool("no-important", false, "Exclude Important label from imported emails (based on X-Gmail-Labels)")
+	importCmd.Flags().Bool("no-starred", false, "Exclude Starred label from imported emails (based on X-Gmail-Labels)")
+	importCmd.Flags().Bool("all-archived", false, "Archive all imported emails (removes INBOX label)")
 }
 
 func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
@@ -135,6 +144,15 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	}
 	if skipInbox, _ := cmd.Flags().GetBool("no-inbox"); skipInbox {
 		config.SkipInboxLabel = skipInbox
+	}
+	if skipImportant, _ := cmd.Flags().GetBool("no-important"); skipImportant {
+		config.SkipImportantLabel = skipImportant
+	}
+	if skipStarred, _ := cmd.Flags().GetBool("no-starred"); skipStarred {
+		config.SkipStarredLabel = skipStarred
+	}
+	if archiveAll, _ := cmd.Flags().GetBool("all-archived"); archiveAll {
+		config.ArchiveAll = archiveAll
 	}
 
 	// Validate required fields
