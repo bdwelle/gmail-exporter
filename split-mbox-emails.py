@@ -109,9 +109,9 @@ def split_mbox(mbox_path, output_dir, verbose=False, counter=None):
     return count, counter
 
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <mbox_file|pattern> [output_dir] [options]")
+        print(f"Usage: {sys.argv[0]} <mbox_file|pattern|dir> [output_dir] [options]")
         print("")
         print("Options:")
         print("  -v, --verbose    Enable verbose output")
@@ -119,7 +119,7 @@ if __name__ == "__main__":
         print("")
         print("Arguments:")
         print(
-            '  mbox_file|pattern  Path to .mbox file or glob pattern (e.g., "mboxes/*.mbox")'
+            '  mbox_file|pattern|dir  Path to .mbox file, glob pattern (e.g., "mboxes/*.mbox"), or directory'
         )
         print(
             "  output_dir         Directory to save split .eml files (default: 2-split-to-import)"
@@ -128,6 +128,7 @@ if __name__ == "__main__":
         print("Examples:")
         print("  Split single file:  ./split-mbox-emails.py emails.mbox")
         print('  Split multiple files: ./split-mbox-emails.py "mboxes/*.mbox"')
+        print("  Split directory:      ./split-mbox-emails.py 1-to-split/")
         print(
             "  Split and append:    ./split-mbox-emails.py new.mbox 2-split-to-import -v"
         )
@@ -137,7 +138,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Parse arguments
-    input_pattern = sys.argv[1]
+    input_path = sys.argv[1]
     output_dir = "2-split-to-import"
     verbose = False
     clear_dir = False
@@ -171,24 +172,37 @@ if __name__ == "__main__":
                 sys.exit(1)
         print("Counter reset to 1", file=sys.stderr)
 
-    # Find matching files (supports glob patterns)
-    if "*" in input_pattern or "?" in input_pattern or "[" in input_pattern:
-        mbox_files = sorted(glob.glob(input_pattern))
+    # Find matching files (supports glob patterns and directories)
+    mbox_files = []
+
+    if os.path.isdir(input_path):
+        # Directory: find all .mbox files
+        for f in os.listdir(input_path):
+            if f.endswith(".mbox"):
+                mbox_files.append(os.path.join(input_path, f))
+        mbox_files.sort()
+        # For directories, create subdirectories for each file
+        use_subdirs = True
+    elif "*" in input_path or "?" in input_path or "[" in input_path:
+        # Glob pattern
+        mbox_files = sorted(glob.glob(input_path))
         if not mbox_files:
             print(
-                f"Error: No files found matching pattern: {input_pattern}",
+                f"Error: No files found matching pattern: {input_path}",
                 file=sys.stderr,
             )
             sys.exit(1)
+        use_subdirs = False
     else:
         # Single file - check if it exists
-        if not os.path.exists(input_pattern):
-            print(f"Error: File not found: {input_pattern}")
+        if not os.path.exists(input_path):
+            print(f"Error: File not found: {input_path}")
             sys.exit(1)
-        if not os.path.isfile(input_pattern):
-            print(f"Error: {input_pattern} is not a file")
+        if not os.path.isfile(input_path):
+            print(f"Error: {input_path} is not a file")
             sys.exit(1)
-        mbox_files = [input_pattern]
+        mbox_files = [input_path]
+        use_subdirs = False
 
     # Check if they are valid mbox files
     for mbox_file in mbox_files:
@@ -199,7 +213,7 @@ if __name__ == "__main__":
             )
             print("Proceeding anyway...", file=sys.stderr)
 
-    # Split all mbox files with a shared counter
+    # Split all mbox files
     counter = 1
     total_messages = 0
 
@@ -208,7 +222,14 @@ if __name__ == "__main__":
             print(f"\n{'=' * 50}", file=sys.stderr)
             print(f"Processing: {mbox_file}", file=sys.stderr)
 
-        count, counter = split_mbox(mbox_file, output_dir, verbose, counter)
+        # Determine output directory for this file
+        if use_subdirs:
+            base_name = os.path.splitext(os.path.basename(mbox_file))[0]
+            file_output_dir = os.path.join(output_dir, base_name)
+        else:
+            file_output_dir = output_dir
+
+        count, counter = split_mbox(mbox_file, file_output_dir, verbose, counter)
         total_messages += count
 
     print(
@@ -219,45 +240,6 @@ if __name__ == "__main__":
         print(f"Error: No valid emails found", file=sys.stderr)
         sys.exit(1)
 
-    # Parse arguments
-    mbox_path = sys.argv[1]
-    output_dir = "2-split-to-import"
-    verbose = False
 
-    i = 2
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-
-        if arg in ["-v", "--verbose"]:
-            verbose = True
-            i += 1
-        elif not arg.startswith("-"):
-            output_dir = arg
-            i += 1
-        else:
-            print(f"Error: Unknown argument: {arg}", file=sys.stderr)
-            sys.exit(1)
-
-    # Validate input file
-    if not os.path.exists(mbox_path):
-        print(f"Error: File not found: {mbox_path}")
-        sys.exit(1)
-
-    if not os.path.isfile(mbox_path):
-        print(f"Error: {mbox_path} is not a file")
-        sys.exit(1)
-
-    # Check if it's a valid mbox file
-    if not is_valid_mbox(mbox_path):
-        print(
-            f"Warning: {mbox_path} does not appear to be a valid mbox file",
-            file=sys.stderr,
-        )
-        print("Proceeding anyway...", file=sys.stderr)
-
-    # Split the mbox file
-    count = split_mbox(mbox_path, output_dir, verbose)
-
-    if count == 0:
-        print(f"Error: No valid emails found in {mbox_path}", file=sys.stderr)
-        sys.exit(1)
+if __name__ == "__main__":
+    main()
