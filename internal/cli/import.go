@@ -23,7 +23,7 @@ The import command uses separate credentials from export to allow importing into
 Gmail account. Use --import-credentials and --import-token to specify different authentication
 files for the destination account.
 
-LABELS:
+	LABELS:
 Use --labels to apply Gmail labels to imported emails. Labels are specified as a
 comma-separated list of label names (e.g., --labels "tickets,music"). The tool will
 automatically resolve label names to their corresponding Gmail label IDs.
@@ -32,6 +32,12 @@ DEDUPLICATION:
 Use --skip-duplicates to avoid importing emails that already exist in Gmail. This checks
 for existing messages by Message-ID before importing. Enabling this will skip duplicates
 and log the count of skipped messages.
+
+INBOX LABEL EXCLUSION:
+Use --no-inbox to prevent the "Inbox" label from being applied to imported
+emails. This is useful when you want imported emails to inherit their original
+labels without automatically adding them to the Inbox folder. When enabled, emails with
+"Inbox" in their X-Gmail-Labels header will have that label excluded during import.
 
 Use --limit to process only a specific number of messages, which is useful for testing
 -import process with a small number of messages before running a full import.`,
@@ -84,9 +90,10 @@ func init() {
 	importCmd.Flags().String("import-token", "", "OAuth token file for destination account (defaults to main token)")
 	importCmd.Flags().Int("parallel-workers", 3, "Number of parallel workers")
 	importCmd.Flags().Bool("preserve-dates", true, "Preserve original email dates")
-	importCmd.Flags().IntP("limit", "l", 0, "Limit the number of messages to process (0 = no limit, useful for testing)")
+	importCmd.Flags().IntP("limit", "l", 0, "Limit number of messages to process (0 = no limit, useful for testing)")
 	importCmd.Flags().String("labels", "", "Gmail labels to apply to imported emails (comma-separated)")
 	importCmd.Flags().Bool("skip-duplicates", false, "Skip emails that already exist in Gmail (based on Message-ID)")
+	importCmd.Flags().Bool("no-inbox", false, "Exclude Inbox label from imported emails (based on X-Gmail-Labels)")
 }
 
 func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
@@ -125,6 +132,9 @@ func buildImportConfig(cmd *cobra.Command) (*importer.Config, error) {
 	}
 	if skipDuplicates, _ := cmd.Flags().GetBool("skip-duplicates"); skipDuplicates {
 		config.SkipDuplicates = skipDuplicates
+	}
+	if skipInbox, _ := cmd.Flags().GetBool("no-inbox"); skipInbox {
+		config.SkipInboxLabel = skipInbox
 	}
 
 	// Validate required fields

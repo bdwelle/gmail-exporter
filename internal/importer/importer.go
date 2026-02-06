@@ -28,6 +28,7 @@ type Config struct {
 	Limit           int    `json:"limit"`
 	Labels          string `json:"labels"`
 	SkipDuplicates  bool   `json:"skip_duplicates"`
+	SkipInboxLabel  bool   `json:"skip_inbox_label"`
 }
 
 // Result represents the import operation result
@@ -517,6 +518,13 @@ func (i *Importer) normalizeLabelName(labelName string) string {
 
 // resolveLabelName resolves a single label name to its ID (with caching)
 func (i *Importer) resolveLabelName(labelName string) string {
+	// Skip "Inbox" label if configured
+	upper := strings.ToUpper(labelName)
+	if upper == "INBOX" && i.config.SkipInboxLabel {
+		logrus.WithField("label", labelName).Debug("Skipping Inbox label per configuration")
+		return ""
+	}
+
 	// Normalize label name first
 	normalizedName := i.normalizeLabelName(labelName)
 
